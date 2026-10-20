@@ -6,7 +6,7 @@ code that enforces the rule, not a framework.
 ## Development setup
 
 ```sh
-git clone https://github.com/zhangqi369/dsh-depth-elevation.git
+git clone https://github.com/zhang17798018728-del/dsh-depth-elevation.git
 cd dsh-depth-elevation
 
 # The plugin has no dependencies of its own: @deepseek-ai/* are peers the

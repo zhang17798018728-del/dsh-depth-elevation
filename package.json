@@ -15,11 +15,11 @@
   "author": "zhangqi369 <1501012974@qq.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/zhangqi369/dsh-depth-elevation.git"
+    "url": "git+https://github.com/zhang17798018728-del/dsh-depth-elevation.git"
   },
-  "homepage": "https://github.com/zhangqi369/dsh-depth-elevation#readme",
+  "homepage": "https://github.com/zhang17798018728-del/dsh-depth-elevation#readme",
   "bugs": {
-    "url": "https://github.com/zhangqi369/dsh-depth-elevation/issues"
+    "url": "https://github.com/zhang17798018728-del/dsh-depth-elevation/issues"
   },
   "engines": {
     "node": ">=22.19"
