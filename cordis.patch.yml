@@ -1,0 +1,6 @@
+# The dsh-depth-elevation bundle patch: inserts the plugin row over the profile
+# root. Per-row config (enabled/verbs/thresholds) lands in the user's profile
+# cordis.patch.yml under id: depth-elevation.
+- insert:
+    - id: depth-elevation
+      name: dsh-depth-elevation

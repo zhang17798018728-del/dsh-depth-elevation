@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [22, 24]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # lib/index.js imports the harness's @deepseek-ai/* peers, which only the
+      # harness supplies at runtime. On a clean runner there is no harness, so
+      # stub the three peers the plugin actually touches.
+      #
+      # What this does and does not prove: the suites below exercise the
+      # plugin's own logic (matcher, seam wiring, message-batch assembly). They
+      # do NOT prove the peers behave like the real harness — for that, run
+      # tools/verify_elevation_plugin.py against an actual install, which is a
+      # local step because it needs a licensed DeepSeek Harness install.
+      - name: Stub harness peers
+        shell: bash
+        run: node tools/stub-peers.mjs
+
+      - name: decide (matcher + curated cases + config knobs)
+        run: node test/decide.test.mjs
+
+      - name: apply (seam wiring)
+        run: node test/apply.test.mjs
+
+      - name: e2e (message batch)
+        run: node test/e2e.mjs
+
+  lint-manifest:
+    name: package manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate package.json
+        run: |
+          node -e "
+            const p = require('./package.json');
+            const required = ['name','version','description','license','repository','engines'];
+            const missing = required.filter((k) => !p[k]);
+            if (missing.length) { console.error('missing:', missing); process.exit(1); }
+            if (p.private) { console.error('package.json is private'); process.exit(1); }
+            if (!p.dsh?.bundle?.patch) { console.error('no dsh.bundle.patch'); process.exit(1); }
+            if (!require('fs').existsSync(p.dsh.bundle.patch)) { console.error('bundle patch missing on disk'); process.exit(1); }
+            console.log('manifest ok');
+          "

@@ -1,0 +1,16 @@
+# Peers extracted out of the installed harness app.asar for local testing.
+# Regenerate with: python tools/bootstrap-peers.py
+node_modules/
+
+# Harness runtime scratch
+*.log
+.tmp/
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp

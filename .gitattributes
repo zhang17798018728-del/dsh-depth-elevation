@@ -1,0 +1,13 @@
+# Normalize line endings so Windows contributors don't create whole-file diffs.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF so they run in legacy PowerShell hosts too.
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Binary
+*.png binary
+*.jpg binary
+*.webp binary
+*.zst binary
