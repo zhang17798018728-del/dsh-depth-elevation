@@ -2,7 +2,7 @@
 
 **把你的「升维询问」规则，从提示词约定变成 harness 级强制。**
 
-[English](#english) | 中文
+[English](README.en.md) | 中文
 
 ---
 
@@ -46,15 +46,15 @@
 
 ## 效果
 
-同一份 24 轮实质任务样本，插件判定结果：
+同一份真实历史样本，插件判定结果（数字随会话增长，下表为撰写时快照）：
 
 | 指标 | 结果 |
 |---|---|
-| 命中实质任务 | 18 / 24（75%） |
-| 会话覆盖 | 12 / 14 |
-| 静默放行的 2 个 | 单点提问（本就应豁免） |
+| 命中实质任务 | ~71%（撰写时 20/28） |
+| 会话覆盖 | 撰写时 14/16 |
+| 静默放行的 | 单点提问与追问，本就应豁免 |
 
-未命中的 6 轮是追问和确认，属于规则设计的豁免范围。
+跑 `node test/decide.test.mjs` 可看到你本机的最新数字——回放用的是你本地真实会话库，不是固定夹具。
 
 ## 安装
 
@@ -99,6 +99,7 @@ npm test
     exemptExact: ['继续', '好']         # 精确豁免
     exemptPrefix: ['改成', '换成']      # 前缀豁免（追问编辑）
     minChars: 6                        # 单点查询上限
+    listMinChars: 40                   # 列表算子句 (a) 的最小长度
     materialMinChars: 150              # 粘贴素材阈值
     deliverableMinChars: 20            # 交付请求阈值
 ```
@@ -137,25 +138,21 @@ python tools/bootstrap-peers.py
 
 ---
 
-<a id="english"></a>
 ## English
 
-**Turns your "depth-elevation offer" rule from a prompt convention into harness-level enforcement.**
+**Full documentation: [README.en.md](README.en.md)**
 
-A prompt rule that says *"proactively ask whether to rebuild this task at expert level"* has no teeth: the model reads it every turn and can decide every turn that the task is "too small to bother". Measured over 62 real sessions, it fired on **1 independent task out of 24** that should have triggered it — the model's own reasoning said *"skip the elevation offer to avoid annoying"*.
+Turn your "ask before you build" rule from a prompt convention into harness-level
+enforcement. Measured over 62 real sessions, the prompt-only rule fired on **1 of
+24** tasks that should have triggered it — the model's own reasoning said *"skip
+the elevation offer to avoid annoying"*.
 
-This plugin patrols the `agent/pre-step` seam and, when a prompt matches a hard trigger (file path, code block, pasted material, trigger verb, expected file output), attaches a sourced instruction to the entering message batch requiring the model's first action to be `ask_user_question`.
+This plugin patrols `agent/pre-step` and attaches a sourced instruction to the
+entering message batch when a prompt matches a hard trigger, requiring the model's
+first action to be `ask_user_question`. It uses `additionalContext` semantics,
+never `reject`, because rejecting a pre-step drops the user's own message.
 
-Design notes:
-
-- **`additionalContext`, never `reject`** — rejecting a pre-step drops the user's own message. A missed offer is recoverable; a lost prompt is not.
-- **One gate per session** — without it, every follow-up in a working session re-fires.
-- **Pure decision core** — `lib/decide.js` is a pure function, so the verifier exercises the shipping code against 62 real historical turns, not a reimplementation.
-
-Result on the same sample: 18/24 substantive turns gated (75%), 12/14 sessions covered; the 2 misses are single-point questions that should stay exempt.
-
-```sh
-npm test   # decide + apply + e2e
-```
+Result on the same sample: 18/24 substantive turns gated (75%), 12/14 sessions
+covered; the 2 misses are single-point questions that should stay exempt.
 
 MIT licensed.
