@@ -190,6 +190,12 @@ def expected_rows() -> list[tuple[str, str, str]]:
 
 
 def main() -> int:
+    # Fixture labels and message excerpts are CJK; Windows stdout defaults to cp1252 and
+    # would raise UnicodeEncodeError mid-report. Same guard as the scanner.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
     try:
         _zstd()
     except ImportError:

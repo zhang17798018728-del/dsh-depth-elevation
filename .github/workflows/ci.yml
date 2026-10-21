@@ -57,6 +57,13 @@ jobs:
       # Proves the fidelity classifier points the right way on fixtures. The real
       # measurement needs ~/.dsh/sessions, which a clean runner does not have, so this
       # runs the self-check only and does not claim a pass rate.
+      # Windows runners default stdout to cp1252, so printing CJK exits 1 AFTER the
+      # assertions passed. This runs every Python entry point under cp1252 and fails
+      # on the encode error, which is the bug that turned Windows CI red while Linux
+      # stayed green.
+      - name: python stdout encoding (cp1252)
+        run: node test/encoding.mjs
+
       - name: elevation fidelity (classifier self-check)
         run: python test/_elevation_fidelity.py --self-check
 

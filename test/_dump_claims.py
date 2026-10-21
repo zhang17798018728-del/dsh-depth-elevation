@@ -165,6 +165,15 @@ def main() -> int:
             sessions += 1
         rows.extend(found)
 
+    # Force UTF-8 before printing anything. Windows defaults stdout to the console code
+    # page (cp1252 on a runner), and both branches here emit non-ASCII — CJK source-kind
+    # names in --stats, and CJK message bodies in the JSON. Doing it only on the JSON
+    # path left --stats one Chinese source name away from a UnicodeEncodeError.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
     if "--stats" in sys.argv:
         fired = [r for r in rows if r["fired"]]
         sources: dict[str, int] = {}
@@ -181,7 +190,6 @@ def main() -> int:
             print(f"    {count:5d}  {key}")
         return 0
 
-    sys.stdout.reconfigure(encoding="utf-8")
     json.dump(rows, sys.stdout, ensure_ascii=False)
     return 0
 

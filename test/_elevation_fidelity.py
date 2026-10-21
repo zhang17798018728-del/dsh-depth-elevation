@@ -237,7 +237,22 @@ def _reply(seq, text, reasoning=""):
     return _mk(seq, "assistant/message", {"message": {"role": "assistant", "content": parts}})
 
 
+def _utf8_stdout() -> None:
+    """Force UTF-8 on stdout before printing any CJK.
+
+    Windows defaults stdout to the console code page (cp1252 on a GitHub runner), so
+    printing a Chinese fixture label raises UnicodeEncodeError and the process exits 1
+    after the assertions have already passed. `--stats` and the JSON path already did
+    this; `--self-check` did not, which is why only Windows CI went red.
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
+
 def self_check() -> int:
+    _utf8_stdout()
     good = "①验收标准 … ②原始素材清单 … ③方法与工具 … ④外部裁判方式"
     bad = "我先看一下目录。"
 
@@ -281,12 +296,12 @@ def main() -> int:
     if "--self-check" in sys.argv:
         return self_check()
 
+    _utf8_stdout()
     rows: list[dict] = []
     for path in sorted(glob.glob(SESSIONS)):
         rows.extend(scan_transcript(path))
 
     if "--stats" in sys.argv:
-        sys.stdout.reconfigure(encoding="utf-8")
         for era in ("new", "legacy", "unattributed"):
             era_rows = [r for r in rows if r["era"] == era]
             if not era_rows:
@@ -300,7 +315,6 @@ def main() -> int:
                   f"no-reply={noreply} | artifact rate (answered): {rate}")
         return 0
 
-    sys.stdout.reconfigure(encoding="utf-8")
     json.dump(rows, sys.stdout, ensure_ascii=False)
     return 0
 

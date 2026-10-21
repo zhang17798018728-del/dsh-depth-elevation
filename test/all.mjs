@@ -35,6 +35,7 @@ const SUITES = [
   ['e2e', 'e2e.mjs'],
   ['regress', 'regressions.mjs'],
   ['fidelity', 'fidelity.mjs'],
+  ['encoding', 'encoding.mjs'],
 ];
 
 let failed = 0;
