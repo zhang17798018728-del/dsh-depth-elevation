@@ -77,27 +77,31 @@ check('R4', 'a substantial task is judged the same however it opens',
 // ---------------------------------------------------------------------------
 // R5  the gate must not fire on a message the human never wrote
 // ---------------------------------------------------------------------------
-function fakeCtx() {
+function fakeCtx(rootIds = []) {
   const listeners = new Map();
   return { on(e, h) { listeners.set(e, h); return () => listeners.delete(e); }, listeners,
+           // Contractual root registry: pre-step declares only Agent.id, so the
+           // plugin must learn "is this a child?" from agents.roots(), never
+           // from the incidental agent.session object.
+           agents: { roots: () => rootIds.map((id) => ({ id })) },
            logger: { debug() {} } };
 }
 // Faithful fixture: the harness persists every message WITH its source kind, and the
 // production listener now (correctly) requires a human-sourced message in the batch.
 const um = (text, kind = 'user') => ({ role: 'user', content: [{ type: 'text', text }], source: { kind } });
-const ctx = fakeCtx();
+const ctx = fakeCtx(['r5', 'r5b']);
 apply(ctx, new Config({}));
 const run = (agent, messages) => ctx.listeners.get('agent/pre-step')(
   { agent, messages, signal: undefined },
   async () => ({ kind: 'enter', messages }));
 
 const notice = 'background job pwsh-1 (pwsh: & "D:\\dsh资料\\cli.exe") started.';
-const noticeRun = await run({ id: 'r5', session: { id: 'r5' } }, [um(notice, 'tool-jobs')]);
+const noticeRun = await run({ id: 'r5' }, [um(notice, 'tool-jobs')]);
 check('R5', 'a non-human inbox notice does not gate',
   noticeRun.messages.length === 1,
   `a tool-jobs notice gated the turn; the human wrote nothing. 23 such notices exist locally.`);
 
-const humanRun = await run({ id: 'r5b', session: { id: 'r5b' } }, [um('帮我设计一个工作台')]);
+const humanRun = await run({ id: 'r5b' }, [um('帮我设计一个工作台')]);
 check('R5b', 'a real human prompt still gates',
   humanRun.messages.length === 2,
   `a user-sourced prompt produced ${humanRun.messages.length} messages, expected 2`);
@@ -105,12 +109,9 @@ check('R5b', 'a real human prompt still gates',
 // ---------------------------------------------------------------------------
 // R6  the gate must not fire where a human cannot answer (subagent)
 // ---------------------------------------------------------------------------
-const subCtx = fakeCtx();
+const subCtx = fakeCtx([]);   // empty roots: this agent is not a root
 apply(subCtx, new Config({}));
-const subAgent = {
-  id: 'r6',
-  session: { id: 'r6', delegationDepth: 1 },
-};
+const subAgent = { id: 'r6' };
 const subRun = await subCtx.listeners.get('agent/pre-step')(
   { agent: subAgent, messages: [um('帮我设计一个工作台')], signal: undefined },
   async () => ({ kind: 'enter', messages: [um('帮我设计一个工作台')] }),
@@ -122,14 +123,15 @@ check('R6', 'a subagent session is not gated (harness: a live child cannot open 
 // ---------------------------------------------------------------------------
 // R7  dedupe must key on the session, not the Agent object
 // ---------------------------------------------------------------------------
-const dCtx = fakeCtx();
+const dCtx = fakeCtx(['r7']);
 apply(dCtx, new Config({}));
 const dRun = (agent, text) => dCtx.listeners.get('agent/pre-step')(
   { agent, messages: [um(text)], signal: undefined },
   async () => ({ kind: 'enter', messages: [um(text)] }));
-// A new Agent object for the same session, exactly as resume() constructs one.
-const firstTurn = await dRun({ id: 'r7', session: { id: 'r7' } }, '帮我设计一个工作台');
-const resumed = await dRun({ id: 'r7-again', session: { id: 'r7' } }, '再帮我优化这个方案');
+// A new Agent OBJECT but the same session id, exactly as resume() constructs one
+// (the declared payload field `Agent.id` IS the SessionId).
+const firstTurn = await dRun({ id: 'r7' }, '帮我设计一个工作台');
+const resumed = await dRun({ id: 'r7' }, '再帮我优化这个方案');
 check('R7', 'a resumed Agent on the same session is not re-gated',
   resumed.messages.length === 1,
   `first=${firstTurn.messages.length} messages, resumed=${resumed.messages.length}; observed 2 real re-gates (5ac69198, 7d4eeacf)`);
@@ -140,7 +142,7 @@ check('R7', 'a resumed Agent on the same session is not re-gated',
 // The prompt MUST be one that actually gates — `'帮我设计方案'` is exactly 6 chars,
 // i.e. == minChars, so it never gates and the assertion would pass vacuously. That
 // is the same trap as the dedupe assertion this audit already flagged.
-const rCtx = fakeCtx();
+const rCtx = fakeCtx(['r8']);
 apply(rCtx, new Config({}));
 const rAgent = { id: 'r8' };
 const gateable = '帮我设计一个工作台';
@@ -185,6 +187,44 @@ const unnamed = clauses.filter((c) => !instructionFor(c).includes(c));
 check('R11', 'every clause id appears in the instruction it produces',
   unnamed.length === 0,
   `these clauses are not named: ${unnamed.join(', ')}`);
+
+// ---------------------------------------------------------------------------
+// R12  the pre-step handler touches only contract-declared fields
+// ---------------------------------------------------------------------------
+// The declared payload is `Agent { id: SessionId }` — nothing else. Reading
+// agent.session worked once only because the runtime handed over its internal
+// object; a refactor there silently revives the resume and subagent bugs. This
+// proxy fails loudly the moment any off-contract property is read.
+const cCtx = fakeCtx(['r12']);
+apply(cCtx, new Config({}));
+const contractAgent = new Proxy({ id: 'r12' }, {
+  get(target, prop) {
+    if (prop !== 'id') throw new Error(`off-contract read: agent.${String(prop)}`);
+    return target[prop];
+  },
+});
+let contractError = null;
+try {
+  await cCtx.listeners.get('agent/pre-step')(
+    { agent: contractAgent, messages: [um('帮我设计一个工作台')], signal: undefined },
+    async () => ({ kind: 'enter', messages: [um('帮我设计一个工作台')] }));
+} catch (e) { contractError = e; }
+check('R12', 'pre-step handler reads only contract-declared Agent fields',
+  contractError === null,
+  contractError?.message ?? '');
+
+// ---------------------------------------------------------------------------
+// R13  the four-step method must name a checkable deliverable
+// ---------------------------------------------------------------------------
+// docs/RULE-SCIENCE.md 问题五: all three real 升维 cases recited the steps and
+// skipped the rewrite — the steps had no observable artifact. Demanding the
+// FULL rewritten prompt with ①-④ named makes compliance grep-able instead of
+// self-declared.
+const artifactParts = ['验收标准', '原始素材清单', '方法与工具', '外部裁判方式'];
+const missingParts = artifactParts.filter((p) => !instructionFor('b:设计').includes(p));
+check('R13', 'the instruction demands a rewritten-prompt artifact (four named parts)',
+  missingParts.length === 0,
+  `missing: ${missingParts.join(', ')}`);
 
 console.log();
 console.log(`${passed} passed, ${failed} failed`);

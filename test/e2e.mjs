@@ -31,6 +31,8 @@ function ctx() {
       listeners.set(event, handler);
     },
     listeners,
+    // Contractual root registry (fixtures here are always roots).
+    agents: { roots: () => [{ id: 'e2e' }] },
     logger: { debug() {}, warn() {}, info() {} },
   };
 }

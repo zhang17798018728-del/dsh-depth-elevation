@@ -26,12 +26,16 @@ const fail = (msg) => {
 /** Minimal Cordis context: captures the registered listener. */
 function fakeCtx() {
   const listeners = new Map();
+  const roots = [];
   return {
     on(event, handler) {
       listeners.set(event, handler);
       return () => listeners.delete(event);
     },
     listeners,
+    // Contractual root registry: the plugin must use THIS, not agent.session.
+    agents: { roots: () => roots.map((id) => ({ id })) },
+    _roots: roots,
     logger: { debug() {}, warn() {}, info() {} },
   };
 }
@@ -45,6 +49,8 @@ function userMessage(text) {
 async function turn(ctx, text, agent, downstream = 'enter') {
   const preStep = ctx.listeners.get('agent/pre-step');
   if (!preStep) throw new Error('plugin did not register agent/pre-step');
+  // Every fixture agent here is a root; register it the way the service would.
+  if (agent?.id && !ctx._roots.includes(agent.id)) ctx._roots.push(agent.id);
   const next = async () => (downstream === 'enter'
     ? { kind: 'enter', messages: [userMessage(text)] }
     : { kind: 'reject' });
