@@ -51,7 +51,12 @@ GATE_MARK = "[depth-elevation gate]"
 ARTIFACT_MARK = "外部裁判方式"           # present only in post-R13 instructions
 PARTS = ["验收标准", "原始素材清单", "方法与工具", "外部裁判方式"]
 ELEVATE = "升维"
-SESSIONS = os.path.expanduser("~/.dsh/sessions/*/*/session.v4.jsonl.zstd")
+
+# Root of the session store. Overridable so the end-to-end path (zstd file -> rows ->
+# rate) can be exercised against a synthetic corpus, instead of either polluting the
+# real session store or only testing analyze_events() and skipping the file plumbing.
+SESSIONS_ROOT = os.environ.get("DSH_FIDELITY_SESSIONS") or os.path.expanduser("~/.dsh/sessions")
+SESSIONS = os.path.join(SESSIONS_ROOT, "*", "*", "session.v4.jsonl.zstd")
 
 
 def message_text(message: dict) -> str:

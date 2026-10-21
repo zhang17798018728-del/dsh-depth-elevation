@@ -52,6 +52,12 @@ jobs:
       - name: elevation fidelity (classifier self-check)
         run: python test/_elevation_fidelity.py --self-check
 
+      # Proves the new-era branch end to end: plants synthetic post-R13 transcripts in
+      # the harness's on-disk shape, scans them, and asserts the artifact rate and the
+      # hard-fail verdict. CI-safe: writes only under .tmp/, never the session store.
+      - name: elevation fidelity (new-era scoring on synthetic corpus)
+        run: node test/fidelity.corpus.mjs
+
       - name: apply (seam wiring)
         run: node test/apply.test.mjs
 

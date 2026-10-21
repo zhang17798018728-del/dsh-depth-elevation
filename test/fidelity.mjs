@@ -31,7 +31,11 @@ import { execFileSync } from 'node:child_process';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, '_elevation_fidelity.py');
-const SESSIONS = join(homedir(), '.dsh', 'sessions');
+// Same override the Python scanner honours, so the end-to-end path (corpus dir ->
+// zstd files -> rows -> rate -> verdict) can be exercised against a synthetic corpus.
+// Defaults to the real session store, which is what CI and normal runs measure.
+const SESSIONS = process.env.DSH_FIDELITY_SESSIONS
+  || join(homedir(), '.dsh', 'sessions');
 
 let failed = 0;
 const fail = (msg) => {
