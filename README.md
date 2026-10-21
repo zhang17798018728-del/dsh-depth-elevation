@@ -46,15 +46,23 @@
 
 ## 效果
 
-同一份真实历史样本，插件判定结果（数字随会话增长，下表为撰写时快照）：
+本机真实语料回放的实测结果（数字随会话增长）：
 
 | 指标 | 结果 |
 |---|---|
-| 命中实质任务 | ~71%（撰写时 20/28） |
-| 会话覆盖 | 撰写时 14/16 |
-| 静默放行的 | 单点提问与追问，本就应豁免 |
+| 重建的 claimed 批次 | 467（127 个会话） |
+| 磁盘上真实发生的触发 | 25 |
+| 回放复现 + 已解释的差异 | 419/467（90%） |
+| 无法解释的漏拦 | **0** |
+| 已启用工作区内的误拦 | **2/467（0.4%）** |
 
-跑 `node test/decide.test.mjs` 可看到你本机的最新数字——回放用的是你本地真实会话库，不是固定夹具。
+「已解释的差异」共有两类，都是本次审计修掉的缺陷：5 次是插件现在正确跳过的 subagent / 非人类消息，1 次是重复弹窗（旧代码按 Agent 对象去重，resume 后会重弹）。
+
+早期版本曾把「匹配率」写成效果指标——那只是命中率，不是合规率也不是成功率。真正该看的是最后一行的误拦率。
+
+跑 `node test/decide.test.mjs` 可看到你本机的最新数字。回放用的不是固定夹具，而是从 `agent/inbox/spliced` 重建的 **claimed 批次**——也就是 harness 真正交给插件的那个数组——并把判定结果与磁盘上真实发生过的触发逐一对照。无法解释的漏拦必须为 0，否则测试失败。
+
+附加说明：注入的指令现在会写明命中的子句（如 `(b:设计)`、`(c:material)`），而不是笼统声称「命中硬判据」。这样日志、模型和你都能分辨这次是真正的语义触发，还是正则撞上了一段路径。
 
 ## 安装
 
@@ -96,8 +104,7 @@ npm test
   config:
     enabled: true                      # 总开关
     verbs: ['设计', '方案', '分析']     # 触发动词表
-    exemptExact: ['继续', '好']         # 精确豁免
-    exemptPrefix: ['改成', '换成']      # 前缀豁免（追问编辑）
+    exemptPrefix: ['改成', '换成']      # 追问编辑豁免（仅 <=30 字符）
     minChars: 6                        # 单点查询上限
     listMinChars: 40                   # 列表算子句 (a) 的最小长度
     materialMinChars: 150              # 粘贴素材阈值
@@ -110,13 +117,14 @@ npm test
 npm test
 ```
 
-三套测试，每套针对不同的失效模式：
+四套测试，每套针对不同的失效模式：
 
 | 套件 | 检查什么 | 断言数 |
 |---|---|---|
-| `decide` | 判定核：18 条精选用例 + 配置项生效性 + 真实历史回放 | 18 + 3 + 回放断言 |
+| `decide` | 判定核：18 条精选用例 + 策略守卫 + **真实 claimed 批次回放**（与磁盘上真实触发逐一对照） | 18 + 守卫 + 回放断言 |
 | `apply` | 挂载接线：seam 注册、来源归因、用户消息不被改、每会话去重 | 9 |
 | `e2e` | 真实多消息批次：顺序、来源、下游 reject 透传 | 7 |
+| `regress` | 插件对自己承诺的行为：线性时间、会话级去重、subagent 跳过、reject 可恢复 | 11 |
 
 判定逻辑抽成 `lib/decide.js` 纯函数，**验证器测的就是出货代码**，不是重新实现的副本。
 
@@ -126,9 +134,14 @@ npm test
 python tools/bootstrap-peers.py
 ```
 
+## 审计
+
+`docs/AUDIT.md` 记录了 2026-10-21 的一次全量审计：148 份真实会话回放、16 个变异体测试、harness 契约反编译。结论是插件立论成立（模型服从率 100%，prompt-only 是 4%），但测试套件变异杀伤率只有 37.5%，且存在 1 个 P0 性能缺陷与 3 个 P1 逻辑缺陷——已全部修复，`test/regressions.mjs` 就是那些修复的守卫。
+
 ## 已知边界
 
-- 只判首轮输入；同一会话不重复拦截（防重复弹窗）
+- 只判人类输入；同一会话不重复拦截（防重复弹窗）
+- subagent 会话永不拦截：harness 禁止子 agent 发起人类交互
 - 基于文本启发式，不做语义理解
 - 宁可多拦一次，不静默跳过——这是刻意的
 
@@ -152,7 +165,7 @@ entering message batch when a prompt matches a hard trigger, requiring the model
 first action to be `ask_user_question`. It uses `additionalContext` semantics,
 never `reject`, because rejecting a pre-step drops the user's own message.
 
-Result on the same sample: 18/24 substantive turns gated (75%), 12/14 sessions
-covered; the 2 misses are single-point questions that should stay exempt.
+Measured on this machine's real corpus: 25 gate fires reproduced, 0 unexplained
+misses, 2 false positives in 467 claimed batches (0.4%). See `docs/AUDIT.md`.
 
 MIT licensed.

@@ -38,7 +38,7 @@ function fakeCtx() {
 
 /** A user message as the harness would hand it to pre-step. */
 function userMessage(text) {
-  return { role: 'user', content: [{ type: 'text', text }] };
+  return { role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } };
 }
 
 /** Run one turn through the registered pre-step listener. */

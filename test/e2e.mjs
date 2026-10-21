@@ -36,7 +36,7 @@ function ctx() {
 }
 
 const text = (msg) => (msg.content ?? []).map((p) => p.text ?? '').join('');
-const userMsg = (body) => ({ role: 'user', content: [{ type: 'text', text: body }] });
+const userMsg = (body, kind = 'user') => ({ role: 'user', content: [{ type: 'text', text: body }], source: { kind } });
 
 /**
  * A realistic batch: the harness prepends workspace context, the user's own

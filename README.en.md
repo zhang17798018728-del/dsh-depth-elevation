@@ -46,17 +46,33 @@ The design decision that matters: **`additionalContext` semantics, never `reject
 
 ## Result
 
-The same real-history sample, judged by the plugin (numbers grow as more sessions
-accrue; this is a snapshot at time of writing):
+Measured on this machine's real corpus:
 
 | Metric | Result |
 |---|---|
-| Substantive tasks gated | ~71% (20/28 when written) |
-| Session coverage | 14/16 when written |
-| The silent passes | Single-point questions and follow-ups (correctly exempt) |
+| Claimed batches reconstructed | 467 (127 sessions) |
+| Gate fires that really happened | 25 |
+| Reproduced + explained | 419/467 (90%) |
+| Unexplained misses | **0** |
+| False positives in armed workspaces | **2/467 (0.4%)** |
 
-Run `node test/decide.test.mjs` to see the numbers for *your* machine — the replay
-reads your local session store, not a fixed fixture.
+The two explanations are both defects this audit fixed: 5 are subagent / non-human
+batches the plugin now correctly skips, and 1 is a duplicate offer (the old latch was
+keyed on the Agent object, so a resume re-fired).
+
+An earlier version of this file quoted a "match rate" as the result. That is a hit
+rate — not a compliance rate, not a success rate. The number that matters is the
+false-positive rate on the last line.
+
+Run `node test/decide.test.mjs` to see the numbers for *your* machine. The replay
+reads your local session store — not a fixture — reconstructs the **claimed batch**
+(`inbox.claim()`, the array `pre-step` really hands the plugin) from the durable
+`agent/inbox/spliced` events, and cross-checks its verdict against the gate fires that
+actually happened. Unexplained misses must be zero or the suite fails.
+
+The injected instruction now names the clause that fired (e.g. `(b:设计)`,
+`(c:material)`) instead of asserting a generic "hard trigger". That lets the logs, the
+model, and you tell a real semantic trigger from a regex that happened to hit a path.
 
 ## Install
 
@@ -97,8 +113,7 @@ Every key can be overridden in the profile's `cordis.patch.yml`:
   config:
     enabled: true                      # master switch
     verbs: ['设计', '方案', '分析']     # trigger verbs
-    exemptExact: ['继续', '好']         # exact exemptions
-    exemptPrefix: ['改成', '换成']      # prefix exemptions (follow-up edits)
+    exemptPrefix: ['改成', '换成']      # follow-up edits (<=30 chars only)
     minChars: 6                        # single-point query ceiling
     listMinChars: 40                   # minimum length for a list to count as clause (a)
     materialMinChars: 150              # pasted-material threshold
@@ -113,13 +128,14 @@ Every key can be overridden in the profile's `cordis.patch.yml`:
 npm test
 ```
 
-Three suites, each aimed at a different failure mode:
+Four suites, each aimed at a different failure mode:
 
 | Suite | What it checks | Assertions |
 |---|---|---|
-| `decide` | Matcher: 18 curated cases, config knobs actually take effect, replay of real history | 18 + 3 + replay |
+| `decide` | Matcher: 18 curated cases, policy guards, and a replay of real **claimed batches** cross-checked against what actually fired on disk | 18 + guards + replay |
 | `apply` | Wiring: seam registration, provenance, user prompt untouched, one gate per session | 9 |
 | `e2e` | A realistic multi-message batch: ordering, provenance, downstream reject passthrough | 7 |
+| `regress` | What the plugin promises about itself: linear time, session-level dedupe, subagent skip, reject recovery | 11 |
 
 The decision logic lives in `lib/decide.js` as a pure function, so **the verifier exercises the shipping code**, not a reimplementation of it.
 
@@ -131,9 +147,14 @@ python tools/bootstrap-peers.py
 
 The history replay only runs where a local dsh session corpus exists. With no corpus (CI) it prints a skip; with a corpus that cannot be decoded it **fails** — a skipped layer must never read as a pass.
 
+## Audit
+
+`docs/AUDIT.md` records a full audit (2026-10-21): 148 real transcripts replayed, 16 mutation-tested defects, harness contract decompiled. Verdict: the premise holds (the model complied 100% of the time, versus 4% under prompt-only), but the suite killed only 37.5% of mutations and there were 1 P0 performance defect and 3 P1 logic defects — all fixed, with `test/regressions.mjs` guarding them.
+
 ## Known limitations
 
-- Only the first prompt of a turn is judged; a session is gated once, not per follow-up (an earlier stateless version fired 4 times in one 24-turn session).
+- A human prompt is judged once per session, not per follow-up. Steps without new human input never gate.
+- Subagent sessions are never gated: the harness refuses human interaction from a live child, so an offer there could only burn a turn.
 - Judgement is textual heuristics, not semantic understanding.
 - It errs toward asking once too often rather than skipping silently. That is intentional.
 

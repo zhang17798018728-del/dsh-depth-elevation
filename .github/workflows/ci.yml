@@ -36,8 +36,15 @@ jobs:
         shell: bash
         run: node tools/stub-peers.mjs
 
-      - name: decide (matcher + curated cases + config knobs)
+      # The history replay reads ~/.dsh/sessions, which does not exist on a clean
+      # runner, so it prints a skip and the curated cases + policy guards still run.
+      # The replay is a local step by design: `python tools/verify_elevation_plugin.py`
+      # on a machine with a session store is what exercises it.
+      - name: decide (matcher + curated cases + policy guards)
         run: node test/decide.test.mjs
+
+      - name: regressions (the plugin's promises about itself)
+        run: node test/regressions.mjs
 
       - name: apply (seam wiring)
         run: node test/apply.test.mjs

@@ -33,6 +33,7 @@ const SUITES = [
   ['decide', 'decide.test.mjs'],
   ['apply', 'apply.test.mjs'],
   ['e2e', 'e2e.mjs'],
+  ['regress', 'regressions.mjs'],
 ];
 
 let failed = 0;

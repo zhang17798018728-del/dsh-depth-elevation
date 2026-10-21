@@ -28,7 +28,7 @@ graph but are not an emulation of the runtime.
 |---|---|
 | `lib/decide.js` | Pure decision core — no I/O, no clock, no process state |
 | `lib/index.js` | `apply()` — the seam wiring and context injection |
-| `test/decide.test.mjs` | Curated cases, config knobs, real-history replay |
+| `test/decide.test.mjs` | Curated cases, policy guards, replay of real claimed batches |
 | `test/apply.test.mjs` | Seam registration, provenance, dedupe, prompt preservation |
 | `test/e2e.mjs` | A realistic multi-message batch through the seam |
 | `tools/` | Peer bootstrapping, verification, asar extraction |
@@ -37,9 +37,17 @@ graph but are not an emulation of the runtime.
 ## Rules of the codebase
 
 **Keep the decision core pure.** Everything in `lib/decide.js` must be a pure
-function of `(text, config)`. That is what lets `test/decide.test.mjs` replay
-real conversation history against the shipping matcher instead of a
-reimplementation. Adding I/O there destroys the strongest test we have.
+function of `(batch, context, config)` — `decideGate` is the whole policy, and
+`apply()` is only transport. That is what lets `test/decide.test.mjs` replay real
+claimed batches against the shipping decision instead of a reimplementation.
+Adding I/O there destroys the strongest test we have.
+
+**Replay the input production actually passes.** `agent/pre-step` hands the plugin
+`inbox.claim()`, not the transcript — the batch can contain approvals, subagent
+reports and job notices. `test/_dump_claims.py` reconstructs it from the durable
+`agent/inbox/spliced` events; the replay then compares its verdict against the gate
+fires that really happened. A replay on the human's text measures a different
+program.
 
 **Never return `reject` from pre-step.** `PreStepDecision.reject` drops the
 user's own message. A missed offer is recoverable; a lost prompt is not. If you
@@ -70,8 +78,8 @@ justified by a real miss:
 
 1. Find a real prompt that should have been gated and was not.
 2. Add the verb or rule.
-3. Confirm the replay's `pass` list no longer contains it, and that the ack cases
-   still stay exempt.
+3. Confirm the replay reproduces the intended fire, that `unexplained misses` stays
+   0, and that in-era over-fires do not grow.
 
 Over-firing is the failure mode users notice: an offer on every "继续" trains
 people to ignore the question entirely.
