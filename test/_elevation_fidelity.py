@@ -14,16 +14,23 @@ answer:
   no-reply  — no visible assistant text after the answer (interrupted turn)
 
 Rows are separated by era:
-  new     — the gate instruction that fired contains 外部裁判方式 (post-R13)
-  legacy  — older instruction that never demanded an artifact (baseline only;
-            it was promised nothing, so it is reported, never asserted)
-  unknown — an instruction that names a clause but neither marker (transitional)
+  new          — the gate instruction that fired contains 外部裁判方式 (post-R13)
+  legacy       — older plugin instruction that never demanded an artifact
+                 (baseline only; it was promised nothing, so never asserted)
+  unattributed — an elevation ask with NO gate instruction in this transcript:
+                 hook-era injections (source hooks-claude-code) and hand-asked
+                 questions. Informational only — they are not evidence about
+                 the plugin either way.
 
 STATUS: this measures whether the demand works; it does NOT enforce it. As of the
 commit that added it there are zero `new` rows, because every elevation answer on
 this machine predates the instruction change. The self-check proves the classifier
 points the right way on fixtures; a pass rate needs a corpus that post-dates R13.
 Read `--stats` as a baseline, never as evidence the demand succeeded.
+
+`test/fidelity.mjs` wraps this: it always runs `--self-check`, scans the corpus when
+one exists, hard-fails on any post-fix reply that misses the artifact, and says
+"nothing asserted" when there are no post-fix samples instead of reporting a pass.
 
     python test/_elevation_fidelity.py               # JSON rows to stdout
     python test/_elevation_fidelity.py --stats       # summary + pass rate
@@ -118,7 +125,7 @@ def analyze_events(events: Iterable[dict], sid: str) -> list[dict]:
                 pass
             row = {
                 "sid": sid,
-                "era": pending["era"] or "unknown",
+                "era": pending["era"] or "unattributed",
                 "elevated": elevated,      # None = unparseable; False = 直接做
                 "at": pending["at"],
                 "resultSeq": seq,
@@ -130,10 +137,13 @@ def analyze_events(events: Iterable[dict], sid: str) -> list[dict]:
             continue
 
         # The first visible assistant reply after an elevated answer is the one
-        # the instruction holds accountable.
-        if kind == "assistant/message" and rows and rows[-1]["outcome"] is None:
-            row = rows[-1]
-            if seq <= row["resultSeq"]:
+        # the instruction holds accountable. Multiple open rows are possible when
+        # a session gates again on a later turn: fill the earliest open row whose
+        # answer precedes this reply.
+        if kind == "assistant/message":
+            row = next((r for r in rows
+                        if r["outcome"] is None and seq > r["resultSeq"]), None)
+            if row is None:
                 continue
             text = assistant_visible_text(data.get("message") or {})
             if not text:
@@ -257,7 +267,7 @@ def main() -> int:
 
     if "--stats" in sys.argv:
         sys.stdout.reconfigure(encoding="utf-8")
-        for era in ("new", "legacy", "unknown"):
+        for era in ("new", "legacy", "unattributed"):
             era_rows = [r for r in rows if r["era"] == era]
             if not era_rows:
                 continue
