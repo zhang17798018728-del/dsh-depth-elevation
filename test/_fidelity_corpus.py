@@ -33,7 +33,16 @@ import shutil
 import subprocess
 import sys
 
-from compression import zstd
+def _zstd():
+    """Import `compression.zstd` (Python 3.14+) on demand.
+
+    The corpus has to be written as real zstd frames, so this whole check needs 3.14.
+    Importing lazily keeps the failure legible: the caller reports "needs Python 3.14"
+    instead of dying at import time with ModuleNotFoundError, which on a bare CI runner
+    reads like a broken test rather than a missing interpreter.
+    """
+    from compression import zstd
+    return zstd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCANNER = os.path.join(HERE, "_elevation_fidelity.py")
@@ -166,7 +175,7 @@ def write_session(root: str, workspace: str, name: str, events: list[dict]) -> s
     body = "\n".join(json.dumps(e, ensure_ascii=False) for e in events) + "\n"
     path = os.path.join(folder, "session.v4.jsonl.zstd")
     with open(path, "wb") as fh:
-        fh.write(zstd.compress(body.encode("utf-8")))
+        fh.write(_zstd().compress(body.encode("utf-8")))
     return path
 
 
@@ -181,6 +190,12 @@ def expected_rows() -> list[tuple[str, str, str]]:
 
 
 def main() -> int:
+    try:
+        _zstd()
+    except ImportError:
+        print("SKIP: this check needs Python 3.14+ (compression.zstd); "
+              "the runner's python does not provide it")
+        return 0
     if os.path.isdir(CORPUS):
         shutil.rmtree(CORPUS)
     planted = []

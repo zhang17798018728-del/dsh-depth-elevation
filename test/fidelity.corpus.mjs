@@ -34,7 +34,16 @@ const fail = (m) => { console.log(`FAIL  ${m}`); failed += 1; };
 
 // 1. Build the synthetic corpus and verify the scoring in one shot.
 const built = spawnSync('python', [BUILDER], { encoding: 'utf8' });
-process.stdout.write(built.stdout ?? '');
+const builtOut = built.stdout ?? '';
+process.stdout.write(builtOut);
+
+// A Python without `compression.zstd` (3.14+) cannot write zstd frames, so the build
+// skips itself. That is a real gap, not a pass: say so and stop, rather than falling
+// through to the corpus-exists checks and reporting a green that measured nothing.
+if (builtOut.includes('SKIP:') || /ModuleNotFoundError/.test(built.stderr ?? '')) {
+  console.log('SKIP: new-era corpus check needs Python 3.14+; not verified on this runner');
+  process.exit(0);
+}
 if (built.status !== 0) {
   if (built.stderr) console.log(String(built.stderr).slice(0, 600));
   fail('synthetic new-era corpus did not verify');

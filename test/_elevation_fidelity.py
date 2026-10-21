@@ -45,7 +45,17 @@ import os
 import sys
 from typing import Iterable
 
-from compression import zstd
+
+def _zstd():
+    """Import `compression.zstd` (Python 3.14+) on demand.
+
+    It is only needed to DECOMPRESS a transcript. `--self-check` feeds `analyze_events`
+    fixtures directly, so it must run on any Python 3 — including the 3.12 a stock
+    GitHub runner ships. A module-scope import made the fixture-only check die with
+    ModuleNotFoundError before one assertion ran, which is what turned CI red.
+    """
+    from compression import zstd
+    return zstd
 
 GATE_MARK = "[depth-elevation gate]"
 ARTIFACT_MARK = "外部裁判方式"           # present only in post-R13 instructions
@@ -168,7 +178,12 @@ def analyze_events(events: Iterable[dict], sid: str) -> list[dict]:
 
 def scan_transcript(path: str) -> list[dict]:
     try:
-        raw = zstd.decompress(open(path, "rb").read()).decode("utf-8", "replace")
+        raw = _zstd().decompress(open(path, "rb").read()).decode("utf-8", "replace")
+    except ImportError:
+        # Missing zstd is an environment fact, not an unreadable transcript. Swallowing
+        # it would make every scan return [] and the report say "no samples yet" —
+        # a silent false negative of exactly the kind this instrument exists to catch.
+        raise
     except Exception:
         return []
     sid = os.path.basename(os.path.dirname(path))

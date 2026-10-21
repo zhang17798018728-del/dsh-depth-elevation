@@ -23,6 +23,14 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
+      # Python 3.14 for `compression.zstd`. The session transcripts are multi-frame
+      # zstd, so the fidelity and replay checks cannot decode them on an older Python —
+      # and silently skipping those checks is exactly the false green this repo has
+      # already been burned by once.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
       # lib/index.js imports the harness's @deepseek-ai/* peers, which only the
       # harness supplies at runtime. On a clean runner there is no harness, so
       # stub the three peers the plugin actually touches.
