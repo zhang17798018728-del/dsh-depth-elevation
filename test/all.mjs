@@ -4,52 +4,50 @@
  *
  *   node test/all.mjs
  *
- * Layers, each catching a different failure mode:
- *   1. decide — pure matcher: 18 curated cases, config knobs, and a replay of
- *               every real user turn since the rule was installed. Catches
- *               over-firing and under-firing on data the author did not write.
- *   2. apply  — the shipping apply() against a fake Cordis ctx. Catches broken
- *               seam registration, lost prompts, and missing dedupe.
- *   3. e2e    — a realistic multi-message batch walked through the seam. Catches
- *               ordering and provenance mistakes a unit test cannot see.
+ * The suite list lives in `test/suites.mjs`, because the docs guard (`test/docs.mjs`)
+ * reads the same list to prove the READMEs describe what actually runs. Two copies
+ * of a list drift; one copy cannot.
  *
- * The three suites need the @deepseek-ai/* peers to import lib/index.js. In a
- * real profile the harness supplies those; for a standalone run, materialise
- * them once first:
+ * Layers, each catching a different failure mode:
+ *   decide    pure matcher: curated cases, config knobs, and a replay of every real
+ *             user turn since the rule was installed. Catches over- and under-firing
+ *             on data the author did not write.
+ *   apply     the shipping apply() against a fake Cordis ctx. Catches broken seam
+ *             registration, lost prompts, and missing dedupe.
+ *   e2e       a realistic multi-message batch walked through the seam. Catches
+ *             ordering and provenance mistakes a unit test cannot see.
+ *   regress   the promises the plugin makes about itself.
+ *   fidelity  whether the artifact demand is met, measured on real transcripts.
+ *   encoding  every Python entry point under a cp1252 stdout.
+ *   live      the restart check's verdict function, fixture-proven (no host).
+ *   docs      the documentation matches the code it describes.
+ *
+ * The suites need the @deepseek-ai/* peers to import lib/index.js. In a real profile
+ * the harness supplies those; for a standalone run, materialise them once first:
  *
  *   python tools/asar_peers.py ~/.dsh/plugins/dsh-depth-elevation/node_modules \
  *       @deepseek-ai/dsh-llm @deepseek-ai/schemastery @deepseek-ai/cordis
  *
- * If they are missing the suites fail with a clear module error rather than
- * silently skipping — a skipped layer must never read as a pass.
+ * If they are missing the suites fail with a clear module error rather than silently
+ * skipping — a skipped layer must never read as a pass.
  */
 
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
+import { SUITES } from './suites.mjs';
+
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SUITES = [
-  ['decide', 'decide.test.mjs'],
-  ['apply', 'apply.test.mjs'],
-  ['e2e', 'e2e.mjs'],
-  ['regress', 'regressions.mjs'],
-  ['fidelity', 'fidelity.mjs'],
-  ['encoding', 'encoding.mjs'],
-  // The restart check's live layer needs a running Host, so only its verdict
-  // function is exercised here. Judge drift is then caught by `npm test`, not by
-  // a green-looking no-op on someone's desktop.
-  ['live', '../tools/live_probe.mjs', ['--self-check']],
-];
 
 let failed = 0;
-for (const [label, file, extraArgs = []] of SUITES) {
-  const r = spawnSync(process.execPath, [join(HERE, file), ...extraArgs], { encoding: 'utf8' });
+for (const { label, file, args = [] } of SUITES) {
+  const r = spawnSync(process.execPath, [join(HERE, file), ...args], { encoding: 'utf8' });
   const lines = (r.stdout ?? '').trim().split('\n').filter(Boolean);
   const verdict = lines[lines.length - 1] ?? '(no output)';
   const ok = r.status === 0;
   if (!ok) failed += 1;
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${label.padEnd(7)} ${verdict}`);
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${label.padEnd(8)} ${verdict}`);
   if (!ok) {
     const bad = lines.filter((l) => l.startsWith('FAIL'));
     if (bad.length) console.log(bad.map((l) => `        ${l}`).join('\n'));

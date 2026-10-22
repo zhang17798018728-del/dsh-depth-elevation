@@ -7,21 +7,25 @@
  * different checks — this runs all of them and reports each verdict separately,
  * because "the tests pass" is not the same claim as "the running host is gating":
  *
- *   suites  — `test/all.mjs`: the shipping code still behaves (decide/apply/e2e/…)
+ *   suites  — `test/all.mjs`: the shipping code still behaves
  *   mount   — `tools/verify_elevation_plugin.py`: the profile still composes the row,
- *             the runtime path is still a live junction, the old hook is still retired
- *   live    — `tools/live_probe.mjs`: the RUNNING host has an ACTIVE fiber, its
+ *             the runtime path is still a live junction, the old hook is retired
+ *   live    — `tools/live_probe.mjs --json`: the RUNNING host has an ACTIVE fiber, its
  *             handler is registered, it gates a substantive prompt, and the live
  *             matcher honours the fixture table
  *
  * Only `live` needs the host awake, so this waits for it first (a restart that
- * finishes mid-check would otherwise look like a plugin failure). If the host
- * never appears, or its Inspector is off, that layer reports UNAVAILABLE and the
- * process exits 2 — never PASS. A skipped layer must not read as a green one.
+ * finishes mid-check would otherwise look like a plugin failure). If the host never
+ * appears, or its Inspector is off, that layer reports UNAVAILABLE and the process
+ * exits 2 — never PASS. A skipped layer must not read as a green one.
+ *
+ * The live layer is consumed as JSON, not scraped from its human output: the probe
+ * owns one `checks[]` array and this file renders it, so a renamed field breaks the
+ * build instead of silently printing "(no output)".
  *
  *   node tools/post-restart-check.mjs              # wait up to 120s for the host
  *   node tools/post-restart-check.mjs --timeout=300
- *   node tools/post-restart-check.mjs --no-live    # static layers only (CI-safe)
+ *   node tools/post-restart-check.mjs --no-live    # static layers only (exit 2)
  *
  * Exit: 0 all layers pass · 1 a layer failed · 2 host/Inspector unavailable
  */
@@ -31,6 +35,8 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
+
+import { PROBE_VERSION } from './probe-contract.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = dirname(HERE);
@@ -43,39 +49,89 @@ const skipLive = args.includes('--no-live');
 
 const line = (label, verdict, detail) => console.log(`${verdict.padEnd(5)} ${label.padEnd(7)} ${detail}`);
 
-/** Run a command, return { ok, verdict, tail }. */
-function run(label, command, commandArgs, opts = {}) {
+/** Run a command and return { ok, stdout, stderr }. */
+function exec(command, commandArgs) {
+  const r = spawnSync(command, commandArgs, { cwd: ROOT, encoding: 'utf8' });
+  return { ok: r.status === 0, stdout: r.stdout ?? '', stderr: r.stderr ?? '', status: r.status };
+}
+
+/** First non-empty line that is not a bare brace — a summary, never a JSON fragment. */
+const tailLine = (text) => text.split('\n').map((l) => l.trim()).filter(Boolean).at(-1) ?? '(no output)';
+
+function runSuites() {
   const started = Date.now();
-  const r = spawnSync(command, commandArgs, { cwd: ROOT, encoding: 'utf8', ...opts });
-  const out = `${r.stdout ?? ''}${r.stderr ?? ''}`.trim();
-  const lines = out.split('\n').filter(Boolean);
+  const r = exec(process.execPath, [join(HERE, '..', 'test', 'all.mjs')]);
   const secs = ((Date.now() - started) / 1000).toFixed(1);
-  const summary = summarise(label, out, lines);
-  line(label, r.status === 0 ? 'PASS' : 'FAIL', `${summary} [${secs}s]`);
-  if (r.status !== 0) {
-    for (const bad of lines.filter((l) => /^(FAIL|PASS\s+\S+\s+FAIL:)/.test(l)).slice(0, 6)) {
+  line('suites', r.ok ? 'PASS' : 'FAIL', `${tailLine(r.stdout)} [${secs}s]`);
+  if (!r.ok) {
+    for (const bad of r.stdout.split('\n').filter((l) => l.startsWith('FAIL')).slice(0, 6)) {
       console.log(`        ${bad}`);
     }
   }
-  return { ok: r.status === 0, out };
+  return r.ok;
+}
+
+function runMount() {
+  const started = Date.now();
+  const r = exec('python', [join(HERE, 'verify_elevation_plugin.py')]);
+  const secs = ((Date.now() - started) / 1000).toFixed(1);
+  line('mount', r.ok ? 'PASS' : 'FAIL', `${tailLine(r.stdout)} [${secs}s]`);
+  if (!r.ok) {
+    for (const bad of r.stdout.split('\n').filter((l) => l.startsWith('FAIL')).slice(0, 6)) {
+      console.log(`        ${bad}`);
+    }
+  }
+  return r.ok;
 }
 
 /**
- * The live layer prints JSON, whose last line is `}`. Reporting that as the verdict
- * summary would hide exactly the numbers a restart check exists to show.
+ * The live layer, consumed as structured output.
+ *
+ * A payload the probe did not produce in the shape this file expects is a FAIL, not
+ * a crash and not a pass: that is how a renamed field or a stray `console.log` in the
+ * probe gets caught by the very command that depends on it.
  */
-function summarise(label, out, lines) {
-  if (label !== 'live') return lines[lines.length - 1] ?? '(no output)';
+function runLive() {
+  const started = Date.now();
+  const r = exec(process.execPath, [join(HERE, 'live_probe.mjs'), '--json']);
+  const secs = ((Date.now() - started) / 1000).toFixed(1);
+
+  let payload;
   try {
-    const parsed = JSON.parse(out);
-    if (!parsed.ok) return `not healthy: ${(parsed.problems ?? [parsed.reason ?? 'unknown']).join('; ')}`;
-    return `fiber=${parsed.fiberState} handlers=${parsed.preStepHandlers} matcher=${parsed.matcher} gate=${parsed.gatedClause} latch-restored=${parsed.latchRestored}`;
-  } catch {
-    return lines[lines.length - 1] ?? '(no output)';
+    payload = JSON.parse(r.stdout);
+  } catch (error) {
+    line('live', 'FAIL', `unparseable --json output: ${String(error.message).slice(0, 80)} [${secs}s]`);
+    const first = r.stdout.trim().split('\n')[0] ?? '(empty stdout)';
+    console.log(`        first line: ${first.slice(0, 120)}`);
+    return false;
   }
+
+  if (payload.version !== PROBE_VERSION) {
+    line('live', 'FAIL', `probe payload version ${payload.version}, expected ${PROBE_VERSION} — shape changed [${secs}s]`);
+    return false;
+  }
+  if (payload.reason === 'inspector-unreachable') {
+    line('live', 'UNAVAIL', `no CDP target on 127.0.0.1:${INSPECTOR_PORT} — is experimental-inspector enabled?`);
+    return null;
+  }
+
+  if (payload.ok) {
+    line('live', 'PASS',
+      `fiber=${payload.fiberState} handlers=${payload.preStepHandlers} `
+      + `matcher=${payload.matcher?.passed}/${payload.matcher?.total} `
+      + `gate=${payload.gatedClause} latch-restored=${payload.latchRestored} [${secs}s]`);
+    return true;
+  }
+
+  line('live', 'FAIL', `${payload.reason ?? 'not healthy'} [${secs}s]`);
+  // The probe's own checks[] is the report — this file renders it, never re-derives it.
+  for (const check of payload.checks ?? []) {
+    if (!check.ok) console.log(`        FAIL ${check.id}: ${check.detail}`);
+  }
+  if (payload.hint) console.log(`        ${payload.hint}`);
+  return false;
 }
 
-/** The Host writes running/desktop.json while a profile runtime is live. */
 async function runningPid() {
   try {
     const { pid } = JSON.parse(await readFile(RUNNING, 'utf8'));
@@ -108,8 +164,7 @@ async function waitForHost(seconds) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
   process.stdout.write('\n');
-  const pid = await runningPid();
-  return { pid, inspector: await inspectorUp() };
+  return { pid: await runningPid(), inspector: await inspectorUp() };
 }
 
 console.log(`post-restart self-check  ${new Date().toISOString()}`);
@@ -117,16 +172,13 @@ console.log();
 
 const results = [];
 
-// 1. Shipping code still behaves. Host-independent.
-//    `verify_elevation_plugin.py` below runs this same suite as its own second layer.
-//    That duplication is deliberate: it costs ~50s and keeps the two verdicts
-//    separate, so a red run says which layer broke instead of blaming the mount for
-//    a math error in the matcher.
-results.push({ label: 'suites', ...run('suites', process.execPath, [join(HERE, '..', 'test', 'all.mjs')]) });
+// 1. Shipping code still behaves. Host-independent. `verify_elevation_plugin.py`
+//    below runs this same suite as its own second layer; the duplication is
+//    deliberate — separate verdicts say which layer broke.
+results.push({ label: 'suites', ok: runSuites() });
 
-// 2. Profile still composes the row and points at this working tree. Host-independent
-//    in principle, but the mount check drives the installed Electron binary.
-results.push({ label: 'mount', ...run('mount', 'python', [join(HERE, 'verify_elevation_plugin.py')]) });
+// 2. Profile still composes the row and points at this working tree.
+results.push({ label: 'mount', ok: runMount() });
 
 // 3. The running host: the only layer that can see a mount that failed at boot.
 if (skipLive) {
@@ -143,7 +195,8 @@ if (skipLive) {
     line('live', 'UNAVAIL', `no CDP target on 127.0.0.1:${INSPECTOR_PORT} — is experimental-inspector enabled?`);
     results.push({ label: 'live', ok: null, unavailable: 'inspector-disabled' });
   } else {
-    results.push({ label: 'live', ...run('live', process.execPath, [join(HERE, 'live_probe.mjs')]) });
+    const live = runLive();
+    results.push({ label: 'live', ok: live, ...(live === null ? { unavailable: 'inspector-disabled' } : {}) });
   }
 }
 

@@ -128,14 +128,23 @@ Every key can be overridden in the profile's `cordis.patch.yml`:
 npm test
 ```
 
-Four suites, each aimed at a different failure mode:
+Each suite targets a different failure mode. `test/docs.mjs` checks this table against
+`test/suites.mjs`, so adding a suite without updating the docs turns the build red
+instead of letting the table go stale:
 
-| Suite | What it checks | Assertions |
-|---|---|---|
-| `decide` | Matcher: 18 curated cases, policy guards, and a replay of real **claimed batches** cross-checked against what actually fired on disk | 18 + guards + replay |
-| `apply` | Wiring: seam registration, provenance, user prompt untouched, one gate per session | 9 |
-| `e2e` | A realistic multi-message batch: ordering, provenance, downstream reject passthrough | 7 |
-| `regress` | What the plugin promises about itself: linear time, session-level dedupe, subagent skip, reject recovery | 11 |
+<!-- suites:begin -->
+| Suite | What it checks |
+|---|---|
+| `decide` | Matcher: curated cases, policy guards, and a replay of real **claimed batches** cross-checked against what actually fired on disk |
+| `apply` | Wiring: seam registration, provenance, user prompt untouched, one gate per session |
+| `e2e` | A realistic multi-message batch: ordering, provenance, downstream reject passthrough |
+| `regress` | What the plugin promises about itself: linear time, session-level dedupe, subagent skip, reject recovery |
+| `fidelity` | Whether the four-part rewritten prompt is actually produced after 升维 (classifier self-check + real corpus) |
+| `encoding` | Every Python entry point survives a cp1252 stdout |
+| `live` | The restart check's verdict function, fixture-proven (no host required) |
+| `contract` | The machine contract for `live_probe.mjs --json`: exactly one JSON object on stdout, both modes distinguishable |
+| `docs` | Documentation guard: this table matches `test/suites.mjs`, and every command and path it names exists |
+<!-- suites:end -->
 
 The decision logic lives in `lib/decide.js` as a pure function, so **the verifier exercises the shipping code**, not a reimplementation of it.
 
@@ -161,17 +170,20 @@ npm run check:restart
 |---|---|---|---|
 | `suites` | `node test/all.mjs` | The shipping code still behaves | no |
 | `mount` | `python tools/verify_elevation_plugin.py` | The profile still composes the row, the runtime path is still a live junction, the old hook is still retired | yes (installed harness) |
-| `live` | `node tools/live_probe.mjs` | In the **running** host: the fiber is ACTIVE, `inject: ['agents']` resolved, the handler is registered, it gates a substantive prompt, it exempts `收到`, and the live matcher agrees with 10 fixtures | yes (waits 120s by default) |
+| `live` | `node tools/live_probe.mjs` | In the **running** host: the fiber is ACTIVE, `inject: ['agents']` resolved, the handler is registered, it gates a substantive prompt, it exempts `收到`, and the live matcher agrees with its fixture table | yes (waits 120s by default) |
 
 The `live` layer attaches to the host's own Inspector (CDP `127.0.0.1:9230`) and
-drives the registered `agent/pre-step` handler for real. Its only side effect is the
-plugin's module-private one-shot latch (a Set of agent ids); the probe restores it by
-object identity and re-scans to confirm, so no real session loses its single offer.
+drives the registered `agent/pre-step` handler for real. Both output modes share one
+`checks[]` array: human-readable by default, one JSON object under `--json`, which
+`tools/post-restart-check.mjs` consumes directly instead of scraping prose.
+
+Its only side effect is the plugin's module-private one-shot latch (a Set of agent
+ids); the probe restores it by object identity and re-scans to confirm, so no real
+session loses its single offer.
 
 When the host is not up, or its Inspector is off, that layer reports `UNAVAILABLE`
-and the process exits **2** — a layer that did not run never reads as PASS.
-`npm run check:live:self` runs the CI-safe half: 13 known-answer fixtures proving the
-verdict function points the right way.
+and the process exits **2** — a layer that did not run never reads as PASS. Without a
+host, the `live` suite inside `npm test` proves the verdict function on fixtures.
 
 ## Audit
 

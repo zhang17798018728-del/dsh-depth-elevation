@@ -85,6 +85,17 @@ jobs:
       - name: live probe (verdict self-check)
         run: node tools/live_probe.mjs --self-check
 
+      # Same reason as above, for the machine contract: the probe's `--json` must stay
+      # one parseable object on stdout even when no Host answers (exit 2 is itself a
+      # valid payload). This is what tools/post-restart-check.mjs depends on.
+      - name: live probe (--json contract)
+        run: node test/contract.mjs
+
+      # Documentation drifts silently: this table said "four suites" while eight ran.
+      # Neither README can go stale without this step going red.
+      - name: docs match the code
+        run: node test/docs.mjs
+
   lint-manifest:
     name: package manifest
     runs-on: ubuntu-latest

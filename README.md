@@ -117,14 +117,22 @@ npm test
 npm test
 ```
 
-四套测试，每套针对不同的失效模式：
+每套针对不同的失效模式。这张表由 `test/docs.mjs` 对照 `test/suites.mjs` 校验 —— 加了套件
+却忘了改表，测试会红，不会悄悄过期：
 
-| 套件 | 检查什么 | 断言数 |
-|---|---|---|
-| `decide` | 判定核：18 条精选用例 + 策略守卫 + **真实 claimed 批次回放**（与磁盘上真实触发逐一对照） | 18 + 守卫 + 回放断言 |
-| `apply` | 挂载接线：seam 注册、来源归因、用户消息不被改、每会话去重 | 9 |
-| `e2e` | 真实多消息批次：顺序、来源、下游 reject 透传 | 7 |
-| `regress` | 插件对自己承诺的行为：线性时间、会话级去重、subagent 跳过、reject 可恢复 | 11 |
+<!-- suites:begin -->
+| 套件 | 检查什么 |
+|---|---|
+| `decide` | 判定核：精选用例 + 策略守卫 + **真实 claimed 批次回放**（与磁盘上真实触发逐一对照） |
+| `apply` | 挂载接线：seam 注册、来源归因、用户消息不被改、每会话去重 |
+| `e2e` | 真实多消息批次：顺序、来源、下游 reject 透传 |
+| `regress` | 插件对自己承诺的行为：线性时间、会话级去重、subagent 跳过、reject 可恢复 |
+| `fidelity` | 选了「升维」之后模型是否真的产出四段式重写稿（分类器自证 + 真实语料测量） |
+| `encoding` | 每个 Python 入口在 cp1252 stdout 下不因打印中文而崩 |
+| `live` | 重启后自检 live 层的判定函数：known-answer fixture 证明它指向正确 |
+| `contract` | `live_probe.mjs --json` 的机器契约：stdout 恰好一个 JSON 对象、两种模式可区分 |
+| `docs` | 文档守卫：本表与 `test/suites.mjs` 一致、引用的脚本与文件真实存在 |
+<!-- suites:end -->
 
 判定逻辑抽成 `lib/decide.js` 纯函数，**验证器测的就是出货代码**，不是重新实现的副本。
 
@@ -147,16 +155,19 @@ npm run check:restart
 |---|---|---|---|
 | `suites` | `node test/all.mjs` | 出货代码行为未变 | 否 |
 | `mount` | `python tools/verify_elevation_plugin.py` | profile 仍组装该行、运行时路径仍是活 junction、旧 hook 仍退役 | 需要已安装 harness |
-| `live` | `node tools/live_probe.mjs` | **运行中宿主**里 fiber 是 ACTIVE、`inject: ['agents']` 已解析、handler 已注册、真拦一条实质输入、放行「收到」、实例判定器过 10 条 fixture | 是（默认等 120s） |
+| `live` | `node tools/live_probe.mjs` | **运行中宿主**里 fiber 是 ACTIVE、`inject: ['agents']` 已解析、handler 已注册、真拦一条实质输入、放行「收到」、实例判定器过全套 fixture | 是（默认等 120s） |
 
 `live` 层通过宿主自带的 Inspector（CDP `127.0.0.1:9230`）读取活着的 Cordis 运行时，
-并真实驱动一次已注册的 `agent/pre-step`：唯一副作用是插件那个模块私有的一次性
-latch（按 agent id 去重的 Set），探针按**对象身份**精确复原并复扫确认，不会消耗任何
-真实会话的首次机会。
+并真实驱动一次已注册的 `agent/pre-step`。它两种输出模式共享同一个 `checks[]`：
+默认给人读，`--json` 给机器读，`tools/post-restart-check.mjs` 直接消费后者，
+不再刮人类文本。
+
+唯一副作用是插件那个模块私有的一次性 latch（按 agent id 去重的 Set），探针按
+**对象身份**精确复原并复扫确认，不会消耗任何真实会话的首次机会。
 
 宿主没起来或 Inspector 没开时，该层报 `UNAVAILABLE` 并以 **exit 2** 结束——跳过
-的层永远不显示为 PASS（这条纪律来自 CONTRIBUTING.md）。CI/无宿主环境用
-`npm run check:live:self`，它用 13 条 known-answer fixture 证明判定函数指向正确。
+的层永远不显示为 PASS（这条纪律来自 CONTRIBUTING.md）。没有宿主的环境里，
+`npm test` 里的 `live` 套件用 known-answer fixture 证明判定函数指向正确。
 
 ## 审计
 

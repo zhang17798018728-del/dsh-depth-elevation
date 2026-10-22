@@ -13,24 +13,28 @@
  *   1. a Fiber named `dsh-depth-elevation` exists and is ACTIVE (state 2)
  *   2. its config is enabled and its declared `agents` service resolved
  *   3. exactly one `agent/pre-step` handler sits under its own ctx
- *   4. that handler appends an instruction stamped `source.kind = 'depth-elevation'`
- *      to a substantive prompt, keeps the user's message first, and leaves `收到` alone
- *   5. the live matcher (`decideGate` from the loaded module) returns the expected
+ *   4. the live matcher (`decideGate` from the loaded module) returns the expected
  *      clause ids on a fixture table — the policy that ships, not a copy
+ *   5. that handler appends an instruction stamped `source.kind = 'depth-elevation'`
+ *      to a substantive prompt, keeps the user's message first, and leaves `收到` alone
  *
- * Step 4 writes the plugin's module-private one-shot latch (a Set of agent ids).
- * Two things constrain it. First, the agent id MUST be a live root session id: the
- * handler classifies any id absent from `agents.roots()` as a subagent and skips it,
- * so a synthetic id can never gate and would prove nothing. Second, the restore is by
- * identity, not by value — the probe snapshots WHICH Set objects hold the key before
- * the call, deletes it only from Sets that newly gained it, then re-scans to prove
- * nothing holds it. Session ids appear in unrelated Sets too, so a delete-by-value
- * scan would corrupt live session bookkeeping. Residual risk, stated: for the few
- * milliseconds the key is set, a real turn in that session would miss its offer; the
- * key is removed before the probe exits, so the session keeps its one chance.
+ * Output contract — two modes, one source of truth:
+ *   default  human-readable PASS/FAIL lines, then a verdict line
+ *   --json   exactly ONE JSON object on stdout, parseable as a whole; exit code
+ *            unchanged. Anything else printed by the probe would break the pipe, so
+ *            every early exit goes through `emit()` too.
+ *
+ * Step 5 writes the plugin's module-private one-shot latch (a Set of agent ids), so
+ * the restore is measured, not assumed: the probe snapshots which Set objects hold
+ * the key before the call, deletes it only from Sets that newly gained it, then
+ * re-scans to prove nothing holds it. Session ids appear in unrelated Sets too, so a
+ * delete-by-value scan would corrupt live session bookkeeping. Residual risk, stated:
+ * for the few milliseconds the key is set, a real turn in that session would miss its
+ * offer; the key is removed before exit, so the session keeps its one chance.
  *
  * Usage:
- *   node tools/live_probe.mjs                 # live check
+ *   node tools/live_probe.mjs                 # human-readable
+ *   node tools/live_probe.mjs --json          # one JSON object
  *   node tools/live_probe.mjs --self-check    # CI-safe: fixture-proves the verdict
  *   DSH_INSPECTOR_PORT=9230 node tools/live_probe.mjs
  *
@@ -40,6 +44,8 @@
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+
+import { PROBE_VERSION } from './probe-contract.mjs';
 
 const PORT = Number(process.env.DSH_INSPECTOR_PORT ?? 9230);
 const RUNNING = join(homedir(), '.dsh', 'dsh-config-manager', 'running', 'desktop.json');
@@ -51,6 +57,11 @@ const PLUGIN = 'dsh-depth-elevation';
 const SOURCE_KIND = 'depth-elevation';
 const GATE_MARK = '[depth-elevation gate]';
 const ACTIVE = 2; // Cordis Fiber.state; every healthy plugin on this runtime carries it
+
+// PROBE_VERSION lives in ./probe-contract.mjs: one definition, two readers (this probe
+// writes the payload, tools/post-restart-check.mjs consumes it). Two literals would let
+// one side be bumped while the other still expects the old shape.
+const JSON_MODE = process.argv.includes('--json');
 
 /**
  * The live matcher must agree with this table. Each row is a prompt the rule text
@@ -78,34 +89,73 @@ const POLICY_FIXTURES = [
 ];
 
 /**
- * Pure verdict: live observations -> { ok, problems }.
+ * Pure verdict: live observations -> { ok, problems, checks }.
  *
  * Separate from the CDP plumbing so `--self-check` can prove the judgement on
- * fixtures without a host. Each problem names the observation, not the symptom.
+ * fixtures without a host. `checks` is the single source of truth: the human output
+ * renders it, the JSON output carries it, and `problems` is derived from it — so the
+ * two modes can never disagree about why a run failed.
  */
 export function analyse({ detail, seam, policy, latchLeft }) {
-  const problems = [];
-  if (!detail) return { ok: false, problems: ['no fiber detail returned'] };
-  if (detail.fiberState !== ACTIVE) problems.push(`fiber state ${detail.fiberState}, expected ${ACTIVE} (ACTIVE)`);
-  if (!detail.enabled) problems.push('plugin config is disabled');
-  if (!detail.injectResolved) problems.push('declared agents service did not resolve');
-  if (detail.preStepHandlers !== 1) problems.push(`${detail.preStepHandlers} pre-step handlers under the plugin ctx, expected 1`);
-  if (!Array.isArray(policy)) problems.push('live matcher was never exercised');
-  else {
+  const checks = [];
+  const add = (id, ok, detailText) => checks.push({ id, ok: Boolean(ok), detail: detailText });
+
+  add('fiber', detail?.fiberState === ACTIVE, `state=${detail?.fiberState ?? 'missing'} (want ${ACTIVE} ACTIVE)`);
+  add('config', detail?.enabled === true, detail?.enabled ? 'enabled' : 'disabled');
+  add('inject', detail?.injectResolved === true, detail?.injectResolved ? 'agents resolved' : 'agents unresolved');
+  add('handler', detail?.preStepHandlers === 1, `${detail?.preStepHandlers ?? 0} pre-step handler(s) (want 1)`);
+
+  if (!Array.isArray(policy)) {
+    add('matcher', false, 'never exercised');
+  } else {
     const wrong = policy.filter((row) => !row.ok);
-    if (wrong.length) problems.push(`live matcher disagrees on ${wrong.length}/${policy.length} fixtures: ${wrong.map((r) => `${r.text}->${r.got}`).join('; ')}`);
+    add('matcher', wrong.length === 0,
+      `${policy.length - wrong.length}/${policy.length} fixtures`
+      + (wrong.length ? `; wrong: ${wrong.map((r) => `${JSON.stringify(r.text)}->${r.got} (want ${r.want})`).join(', ')}` : ''));
   }
-  if (!seam) problems.push('seam was never exercised');
-  else {
-    if (seam.gate?.kind !== 'enter') problems.push(`gated turn returned kind=${seam.gate?.kind}`);
-    if (seam.gate?.source !== SOURCE_KIND) problems.push('substantive prompt was not gated');
-    if (!seam.gate?.appended) problems.push('instruction was not appended to the batch');
-    if (!String(seam.gate?.text ?? '').includes(GATE_MARK)) problems.push('instruction lacks the gate marker');
-    if (!seam.gate?.preservedUserMessage) problems.push('handler dropped or replaced the user message');
-    if (seam.exempt?.source !== null) problems.push('acknowledgment was gated (over-firing)');
+
+  if (!seam) {
+    add('seam', false, 'never exercised');
+  } else {
+    add('gate.kind', seam.gate?.kind === 'enter', `kind=${seam.gate?.kind}`);
+    add('gate.source', seam.gate?.source === SOURCE_KIND, `source=${seam.gate?.source ?? 'none'}`);
+    add('gate.append', Boolean(seam.gate?.appended), seam.gate?.appended ? 'instruction appended' : 'not appended');
+    add('gate.marker', String(seam.gate?.text ?? '').includes(GATE_MARK), 'gate marker present');
+    add('gate.preserve', Boolean(seam.gate?.preservedUserMessage), 'user message kept first');
+    add('exempt', seam.exempt?.source === null, `收到 -> ${seam.exempt?.source ?? 'exempt'}`);
   }
-  if (latchLeft !== 0) problems.push(`latch restore left the probe key in ${latchLeft} set(s)`);
-  return { ok: problems.length === 0, problems };
+
+  add('latch', latchLeft === 0, latchLeft === 0 ? 'restored' : `key left in ${latchLeft} set(s)`);
+
+  const problems = checks.filter((c) => !c.ok).map((c) => `${c.id}: ${c.detail}`);
+  return { ok: problems.length === 0, problems, checks };
+}
+
+// ---------------------------------------------------------------------------
+// Output: one emitter for both modes
+// ---------------------------------------------------------------------------
+
+/**
+ * Print the result and exit. `payload` always carries `version`/`ok`; in JSON mode it
+ * is the ONLY thing written to stdout, which is the contract `--json` promises.
+ */
+function emit(payload, code) {
+  if (JSON_MODE) {
+    process.stdout.write(`${JSON.stringify({ version: PROBE_VERSION, ...payload })}\n`);
+  } else {
+    const { checks = [] } = payload;
+    for (const check of checks) {
+      console.log(`${check.ok ? 'PASS' : 'FAIL'}  ${check.id.padEnd(14)} ${check.detail}`);
+    }
+    if (payload.reason) console.log(`\n${payload.ok ? 'PASS' : 'FAIL'}  ${payload.reason}`);
+    if (payload.hint) console.log(`      ${payload.hint}`);
+    for (const problem of payload.problems ?? []) console.log(`      - ${problem}`);
+    console.log();
+    console.log(payload.ok
+      ? `PASS: running host gates substantive prompts (pid ${payload.pid ?? '?'})`
+      : `FAIL: ${payload.problems?.length ?? 1} check(s) failed${payload.reason ? ` (${payload.reason})` : ''}`);
+  }
+  process.exit(code);
 }
 
 // ---------------------------------------------------------------------------
@@ -113,7 +163,7 @@ export function analyse({ detail, seam, policy, latchLeft }) {
 // ---------------------------------------------------------------------------
 
 const goodPolicy = POLICY_FIXTURES.map(([text, want]) => ({ text, want, got: want, ok: true }));
-const goodDetail = { fiberState: 2, enabled: true, injectResolved: true, preStepHandlers: 1 };
+const goodDetail = { fiberState: ACTIVE, enabled: true, injectResolved: true, preStepHandlers: 1 };
 const goodSeam = {
   gate: { kind: 'enter', source: SOURCE_KIND, appended: true, text: `${GATE_MARK} x (b:设计)`, preservedUserMessage: true },
   exempt: { source: null },
@@ -137,15 +187,26 @@ function selfCheck() {
     ['matcher drift -> fail', goodDetail, goodSeam, [{ text: '收到', want: null, got: 'b:设计', ok: false }], 0, false],
   ];
 
-  let failed = 0;
-  for (const [label, detail, seam, policy, latchLeft, want] of cases) {
+  const results = cases.map(([label, detail, seam, policy, latchLeft, want]) => {
     const got = analyse({ detail, seam, policy, latchLeft });
-    if (got.ok !== want) {
-      console.log(`FAIL  self-check ${label}: got ok=${got.ok}, want ${want}`);
-      failed += 1;
-    } else {
-      console.log(`ok    ${label}`);
+    return { label, ok: got.ok === want, got: got.ok, want, checks: got.checks };
+  });
+  const failed = results.filter((r) => !r.ok).length;
+
+  if (JSON_MODE) {
+    process.stdout.write(`${JSON.stringify({
+      version: PROBE_VERSION, suite: 'self-check', ok: failed === 0,
+      cases: results.map(({ label, ok }) => ({ label, ok })),
+      failures: results.filter((r) => !r.ok).map((r) => `${r.label}: got ok=${r.got}, want ${r.want}`),
+    })}\n`);
+  } else {
+    for (const r of results) {
+      console.log(`${r.ok ? 'ok    ' : 'FAIL  '} ${r.ok ? r.label : `${r.label}: got ok=${r.got}, want ${r.want}`}`);
     }
+    console.log();
+    console.log(failed === 0
+      ? `self-check passed: the verdict function points the right way on ${results.length} fixtures`
+      : `${failed} self-check case(s) failed`);
   }
   return failed;
 }
@@ -153,11 +214,6 @@ function selfCheck() {
 // ---------------------------------------------------------------------------
 // Live check
 // ---------------------------------------------------------------------------
-
-const report = (payload, code) => {
-  console.log(JSON.stringify(payload, null, 2));
-  process.exit(code);
-};
 
 async function readRunningPid() {
   try {
@@ -172,10 +228,10 @@ async function connect() {
   try {
     targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
   } catch (error) {
-    return { error: 'inspector-unreachable', detail: String(error.message).slice(0, 160), port: PORT };
+    return { error: 'inspector-unreachable', detail: String(error.message).slice(0, 160) };
   }
   const page = targets?.find((t) => t.type === 'page');
-  if (!page?.webSocketDebuggerUrl) return { error: 'inspector-unreachable', port: PORT, targets: targets?.length ?? 0 };
+  if (!page?.webSocketDebuggerUrl) return { error: 'inspector-unreachable', targets: targets?.length ?? 0 };
 
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   const pending = new Map();
@@ -190,7 +246,7 @@ async function connect() {
     ws.addEventListener('open', () => resolve(true), { once: true });
     ws.addEventListener('error', () => resolve(false), { once: true });
   });
-  if (!opened) return { error: 'inspector-unreachable', port: PORT };
+  if (!opened) return { error: 'inspector-unreachable' };
 
   const call = (method, params = {}) => new Promise((resolve) => {
     const id = nextId++;
@@ -227,24 +283,17 @@ const PRELUDE = `
 `;
 
 if (process.argv.includes('--self-check')) {
-  const failed = selfCheck();
-  console.log();
-  if (failed) {
-    console.log(`${failed} self-check case(s) failed`);
-    process.exit(1);
-  }
-  console.log('self-check passed: the verdict function points the right way on 13 fixtures');
-  process.exit(0);
+  process.exit(selfCheck() === 0 ? 0 : 1);
 }
 
 const runningPid = await readRunningPid();
+const base = { pid: runningPid, port: PORT, host: RUNNING };
+
 const runtime = await connect();
 if (runtime.error) {
-  report({
-    ok: false,
-    reason: runtime.error,
-    port: PORT,
-    runningPid,
+  emit({
+    ...base, ok: false, reason: runtime.error,
+    ...(runtime.detail ? { detail: runtime.detail } : {}),
     hint: `no CDP target on 127.0.0.1:${PORT}; is the Host running with the Inspector enabled?`,
   }, 2);
 }
@@ -252,37 +301,36 @@ if (runtime.error) {
 // --- 1-3. wiring, read-only ------------------------------------------------
 let detail;
 try {
-  const raw = await runtime.evaluate(`{
+  detail = JSON.parse(await runtime.evaluate(`{
     ${PRELUDE}
     if (!registry) return JSON.stringify({ error: 'no realm object registry — Inspector mounted?' });
     if (!fiber) return JSON.stringify({ error: 'fiber not found' });
     return JSON.stringify({
       fiberState: safe(() => fiber.state, null),
       enabled: safe(() => fiber.config?.enabled === true, false),
-      // \`inject\` is only the declaration (values stay null for a plain required
-      // service); resolution is visible in \`store\`, which cordis fills once every
+      // inject is only the declaration (values stay null for a plain required
+      // service); resolution is visible in store, which cordis fills once every
       // declared service is present.
       injectResolved: safe(() => Object.keys(fiber.store ?? {}).includes('agents'), false),
       preStepHandlers: safe(() => (fiber.ctx.events?._hooks?.['agent/pre-step'] ?? []).filter((h) => h.ctx === fiber.ctx).length, 0),
       roots: safe(() => fiber.ctx.agents?.roots?.().map((r) => r.id), []),
     });
-  }`);
-  detail = JSON.parse(raw);
+  }`));
 } catch (error) {
   runtime.ws.close();
-  report({ ok: false, reason: 'evaluate-failed', port: PORT, runningPid, detail: String(error.message).slice(0, 300) }, 1);
+  emit({ ...base, ok: false, reason: 'evaluate-failed', detail: String(error.message).slice(0, 300) }, 1);
 }
 if (detail.error) {
   runtime.ws.close();
-  report({ ok: false, reason: 'not-loaded', port: PORT, runningPid, detail: detail.error }, 1);
+  emit({ ...base, ok: false, reason: 'not-loaded', detail: detail.error }, 1);
 }
 
-// --- 5. live matcher (pure; no state touched) ------------------------------
+// --- 4. live matcher (pure; no state touched) ------------------------------
 let policy;
 try {
-  const raw = await runtime.evaluate(`{
+  policy = JSON.parse(await runtime.evaluate(`{
     ${PRELUDE}
-    if (!ns || typeof ns.decideGate !== 'function') return JSON.stringify({ error: 'decideGate not exported by the loaded module' });
+    if (!ns || typeof ns.decideGate !== 'function') return JSON.stringify([{ text: '(module)', want: null, got: 'decideGate missing', ok: false }]);
     const fixtures = ${JSON.stringify(POLICY_FIXTURES)};
     const cfg = safe(() => fiber.config, {}) ?? {};
     const resolved = {
@@ -295,15 +343,13 @@ try {
       const got = safe(() => ns.decideGate(batch, { delegationDepth: 0, alreadyAsked: false }, resolved), 'threw');
       return { text, want, got, ok: got === want };
     }));
-  }`);
-  policy = JSON.parse(raw);
-  if (policy.error) throw new Error(policy.error);
+  }`));
 } catch (error) {
   runtime.ws.close();
-  report({ ok: false, reason: 'matcher-unavailable', port: PORT, runningPid, detail: String(error.message).slice(0, 300) }, 1);
+  emit({ ...base, detail, ok: false, reason: 'matcher-unavailable', error: String(error.message).slice(0, 300) }, 1);
 }
 
-// --- 4. seam proof with an identity-exact restore ---------------------------
+// --- 5. seam proof with an identity-exact restore ---------------------------
 // The latch is a module-private Set. CDP can enumerate every Set object, so the
 // probe records WHICH of them hold the candidate key before the call and deletes
 // the key only from the ones that newly gained it. Deleting by value would also
@@ -312,7 +358,7 @@ const setProto = await runtime.call('Runtime.evaluate', { expression: 'Set.proto
 const setHeap = await runtime.call('Runtime.queryObjects', { prototypeObjectId: setProto.result.objectId });
 if (!setHeap.objects?.objectId) {
   runtime.ws.close();
-  report({ ok: false, reason: 'inspector-query-failed', port: PORT, runningPid, detail: setHeap }, 1);
+  emit({ ...base, detail, ok: false, reason: 'inspector-query-failed' }, 1);
 }
 const setHeapId = setHeap.objects.objectId;
 
@@ -344,8 +390,8 @@ const deleteFrom = async (indices, id) => runtime.call('Runtime.callFunctionOn',
 const roots = detail.roots ?? [];
 if (!roots.length) {
   runtime.ws.close();
-  report({
-    ok: false, reason: 'no-root-session', port: PORT, runningPid, detail,
+  emit({
+    ...base, detail, ok: false, reason: 'no-root-session',
     hint: 'open a session once so the runtime has an agent, then rerun',
   }, 1);
 }
@@ -392,33 +438,37 @@ const latchRestored = probeRoot ? (await holders(probeRoot)).length === 0 : true
 
 runtime.ws.close();
 
+const policyPassed = policy.filter((r) => r.ok).length;
+
 if (!seam) {
-  report({
-    ok: false,
-    reason: 'all-roots-latched',
-    port: PORT,
-    runningPid,
-    detail: { roots: roots.length, checks: { fiberState: detail.fiberState, enabled: detail.enabled,
-      injectResolved: detail.injectResolved, preStepHandlers: detail.preStepHandlers,
-      matcher: `${policy.filter((r) => r.ok).length}/${policy.length}` } },
+  const wiring = analyse({ detail, seam: null, policy, latchLeft: 0 });
+  emit({
+    ...base, detail, ok: false, reason: 'all-roots-latched',
+    fiberState: detail.fiberState,
+    enabled: detail.enabled,
+    injectResolved: detail.injectResolved,
+    preStepHandlers: detail.preStepHandlers,
+    roots: roots.length,
+    matcher: { passed: policyPassed, total: policy.length },
+    checks: wiring.checks,
     hint: 'every open session already used its one-turn offer; the wiring and matcher above still passed. '
       + 'Send one substantive prompt in a new session, then rerun to exercise the seam.',
   }, 1);
 }
 
-const problems = analyse({ detail, seam, policy, latchLeft: probeRoot ? (latchRestored ? 0 : 1) : 0 }).problems;
-report({
-  ok: problems.length === 0,
-  pid: runningPid,
-  port: PORT,
+const verdict = analyse({ detail, seam, policy, latchLeft: latchRestored ? 0 : 1 });
+emit({
+  ...base,
+  ok: verdict.ok,
   fiberState: detail.fiberState,
   enabled: detail.enabled,
   injectResolved: detail.injectResolved,
   preStepHandlers: detail.preStepHandlers,
   roots: roots.length,
-  matcher: `${policy.filter((r) => r.ok).length}/${policy.length} fixtures`,
+  matcher: { passed: policyPassed, total: policy.length },
   gatedClause: /\(([abc]:[^)]+)\)/.exec(seam.gate?.text ?? '')?.[1] ?? null,
   probeRoot,
   latchRestored,
-  problems,
-}, problems.length ? 1 : 0);
+  checks: verdict.checks,
+  problems: verdict.problems,
+}, verdict.ok ? 0 : 1);

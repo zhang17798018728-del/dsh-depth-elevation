@@ -63,7 +63,7 @@ unusable; there was a version that fired 4 times in one 24-turn session.
 ## Before opening a PR
 
 ```sh
-npm test                          # all seven suites
+npm test                          # all suites
 python tools/verify_elevation_plugin.py   # mount + workspace-is-source checks
 ```
 
