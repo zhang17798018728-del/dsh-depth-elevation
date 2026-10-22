@@ -13,7 +13,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # Pinned, not `-latest`: GitHub announced that `ubuntu-latest` migrates to
+        # Ubuntu 26 starting 2026-10-19, and that window is already open. On the day
+        # the alias flips, this matrix would silently change OS under a green build —
+        # exactly the kind of drift that makes a later failure unattributable.
+        #
+        # `ubuntu-24.04` is what `ubuntu-latest` resolved to on the last run, so this
+        # pins the CURRENT behaviour rather than changing it. Windows stays on
+        # `windows-latest`: no migration has been announced for it, and pinning a
+        # variant label (`windows-2025-vs2026`) would trade a non-problem for a new
+        # coupling. Revisit it as a separate change, not as a drive-by.
+        os: [ubuntu-24.04, windows-latest]
         node: [22, 24]
 
     steps:
@@ -108,7 +118,10 @@ jobs:
 
   lint-manifest:
     name: package manifest
-    runs-on: ubuntu-latest
+    # Pinned for the same reason as the matrix above: `ubuntu-latest` flips to
+    # Ubuntu 26 inside the announced window, and a manifest check is not the place
+    # to discover that.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
