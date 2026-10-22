@@ -96,6 +96,16 @@ jobs:
       - name: docs match the code
         run: node test/docs.mjs
 
+      # The steps above run each suite directly, which gives good failure granularity
+      # but never exercises `test/suites.mjs` — the single list those steps are derived
+      # from. Break the aggregate runner and every step above still passes while
+      # `npm test` fails on a developer's machine. This closes that gap.
+      #
+      # Deliberately duplicated: ~15s to keep the two claims separate ("each suite
+      # passes" vs "the list that runs them is wired"), and a red here says which.
+      - name: aggregate runner (test/suites.mjs is wired)
+        run: node test/all.mjs
+
   lint-manifest:
     name: package manifest
     runs-on: ubuntu-latest
