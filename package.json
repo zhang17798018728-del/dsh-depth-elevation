@@ -48,7 +48,10 @@
     "test:decide": "node test/decide.test.mjs",
     "test:apply": "node test/apply.test.mjs",
     "test:e2e": "node test/e2e.mjs",
-    "test:regressions": "node test/regressions.mjs"
+    "test:regressions": "node test/regressions.mjs",
+    "check:restart": "node tools/post-restart-check.mjs",
+    "check:live": "node tools/live_probe.mjs",
+    "check:live:self": "node tools/live_probe.mjs --self-check"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-llm": "^0.2.1-rc.2",

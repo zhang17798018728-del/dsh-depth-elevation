@@ -134,6 +134,30 @@ npm test
 python tools/bootstrap-peers.py
 ```
 
+### 重启后自检
+
+重启是唯一让「昨天还好用」不再算证据的时刻。三层验三件不同的事，分开报，因为
+「测试过了」不等于「正在跑的那个在拦」：
+
+```sh
+npm run check:restart
+```
+
+| 层 | 命令 | 检查什么 | 需要宿主 |
+|---|---|---|---|
+| `suites` | `node test/all.mjs` | 出货代码行为未变 | 否 |
+| `mount` | `python tools/verify_elevation_plugin.py` | profile 仍组装该行、运行时路径仍是活 junction、旧 hook 仍退役 | 需要已安装 harness |
+| `live` | `node tools/live_probe.mjs` | **运行中宿主**里 fiber 是 ACTIVE、`inject: ['agents']` 已解析、handler 已注册、真拦一条实质输入、放行「收到」、实例判定器过 10 条 fixture | 是（默认等 120s） |
+
+`live` 层通过宿主自带的 Inspector（CDP `127.0.0.1:9230`）读取活着的 Cordis 运行时，
+并真实驱动一次已注册的 `agent/pre-step`：唯一副作用是插件那个模块私有的一次性
+latch（按 agent id 去重的 Set），探针按**对象身份**精确复原并复扫确认，不会消耗任何
+真实会话的首次机会。
+
+宿主没起来或 Inspector 没开时，该层报 `UNAVAILABLE` 并以 **exit 2** 结束——跳过
+的层永远不显示为 PASS（这条纪律来自 CONTRIBUTING.md）。CI/无宿主环境用
+`npm run check:live:self`，它用 13 条 known-answer fixture 证明判定函数指向正确。
+
 ## 审计
 
 `docs/AUDIT.md` 记录了 2026-10-21 的一次全量审计：148 份真实会话回放、16 个变异体测试、harness 契约反编译。结论是插件立论成立（模型服从率 100%，prompt-only 是 4%），但测试套件变异杀伤率只有 37.5%，且存在 1 个 P0 性能缺陷与 3 个 P1 逻辑缺陷——已全部修复，`test/regressions.mjs` 就是那些修复的守卫。

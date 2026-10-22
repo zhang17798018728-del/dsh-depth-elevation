@@ -36,11 +36,15 @@ const SUITES = [
   ['regress', 'regressions.mjs'],
   ['fidelity', 'fidelity.mjs'],
   ['encoding', 'encoding.mjs'],
+  // The restart check's live layer needs a running Host, so only its verdict
+  // function is exercised here. Judge drift is then caught by `npm test`, not by
+  // a green-looking no-op on someone's desktop.
+  ['live', '../tools/live_probe.mjs', ['--self-check']],
 ];
 
 let failed = 0;
-for (const [label, file] of SUITES) {
-  const r = spawnSync(process.execPath, [join(HERE, file)], { encoding: 'utf8' });
+for (const [label, file, extraArgs = []] of SUITES) {
+  const r = spawnSync(process.execPath, [join(HERE, file), ...extraArgs], { encoding: 'utf8' });
   const lines = (r.stdout ?? '').trim().split('\n').filter(Boolean);
   const verdict = lines[lines.length - 1] ?? '(no output)';
   const ok = r.status === 0;

@@ -63,13 +63,23 @@ unusable; there was a version that fired 4 times in one 24-turn session.
 ## Before opening a PR
 
 ```sh
-npm test                          # all three suites
+npm test                          # all seven suites
 python tools/verify_elevation_plugin.py   # mount + workspace-is-source checks
 ```
 
 The second command needs a local DeepSeek Harness install and checks the things
 CI cannot: that the plugin is actually mounted in a profile, and that the runtime
 path is a live junction to your working tree rather than a stale copy.
+
+After restarting the harness — the one moment where yesterday's green stops being
+evidence — run all three layers at once:
+
+```sh
+npm run check:restart             # suites + mount + the live host
+```
+
+It exits 2 (not 0) when the host or its Inspector is unavailable, because a layer
+that did not run is not a layer that passed.
 
 ## Adding a trigger
 

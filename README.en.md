@@ -147,6 +147,32 @@ python tools/bootstrap-peers.py
 
 The history replay only runs where a local dsh session corpus exists. With no corpus (CI) it prints a skip; with a corpus that cannot be decoded it **fails** — a skipped layer must never read as a pass.
 
+### After a restart
+
+A restart is the one moment where "it worked yesterday" stops being evidence. Three
+layers check three different things and are reported separately, because "the tests
+pass" is not the same claim as "the host that is running right now is gating":
+
+```sh
+npm run check:restart
+```
+
+| Layer | Command | What it checks | Needs the host |
+|---|---|---|---|
+| `suites` | `node test/all.mjs` | The shipping code still behaves | no |
+| `mount` | `python tools/verify_elevation_plugin.py` | The profile still composes the row, the runtime path is still a live junction, the old hook is still retired | yes (installed harness) |
+| `live` | `node tools/live_probe.mjs` | In the **running** host: the fiber is ACTIVE, `inject: ['agents']` resolved, the handler is registered, it gates a substantive prompt, it exempts `收到`, and the live matcher agrees with 10 fixtures | yes (waits 120s by default) |
+
+The `live` layer attaches to the host's own Inspector (CDP `127.0.0.1:9230`) and
+drives the registered `agent/pre-step` handler for real. Its only side effect is the
+plugin's module-private one-shot latch (a Set of agent ids); the probe restores it by
+object identity and re-scans to confirm, so no real session loses its single offer.
+
+When the host is not up, or its Inspector is off, that layer reports `UNAVAILABLE`
+and the process exits **2** — a layer that did not run never reads as PASS.
+`npm run check:live:self` runs the CI-safe half: 13 known-answer fixtures proving the
+verdict function points the right way.
+
 ## Audit
 
 `docs/AUDIT.md` records a full audit (2026-10-21): 148 real transcripts replayed, 16 mutation-tested defects, harness contract decompiled. Verdict: the premise holds (the model complied 100% of the time, versus 4% under prompt-only), but the suite killed only 37.5% of mutations and there were 1 P0 performance defect and 3 P1 logic defects — all fixed, with `test/regressions.mjs` guarding them.

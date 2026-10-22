@@ -79,6 +79,12 @@ jobs:
       - name: e2e (message batch)
         run: node test/e2e.mjs
 
+      # The restart check's live layer attaches to a running Host over CDP, which a
+      # clean runner does not have. Its verdict function is fixture-proven here
+      # instead, so a broken judge fails CI rather than only showing up on a desktop.
+      - name: live probe (verdict self-check)
+        run: node tools/live_probe.mjs --self-check
+
   lint-manifest:
     name: package manifest
     runs-on: ubuntu-latest
